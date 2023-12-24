@@ -16,15 +16,14 @@ bot = telebot.TeleBot(TOKEN)
 
 
 def escape_markdown(text):
-    # List of Markdown special characters
-    markdown_chars = ['\\*', '\\_', '\\[', '\\]', '\\(', '\\)', '\\~', '\\`', '\\>', '\\#', '\\+', '\\-', '\\=', '\\|',
-                      '\\{', '\\}', '\\.', '\\!']
+    # First, replace literal '\n' with actual newline characters
+    text = text.replace('\\n', '\n')
 
-    # Escape each special character with a backslash
-    for char in markdown_chars:
-        text = re.sub(char, lambda match: '\\' + match.group(0), text)
+    # Escape Markdown special characters except for newline characters
+    markdown_chars = r'[\*_\[\]()~`>#\+\-=|{}\.!]'
+    escaped_text = re.sub(markdown_chars, lambda m: '\\' + m.group(0), text)
 
-    return text
+    return escaped_text
 
 
 # Async function to handle API requests
@@ -79,9 +78,28 @@ def handle_text(message):
     # Asynchronously process the response
     async def process_response():
         last_chunk_received = False
+        message_to_update = None
+        full_response_text = ""  # Initialize an empty string to store the full response
+
         async for response in handle_api_request(message, delete=delete_command, image_url=image_url):
+            # Append the new chunk to the full response
             formatted_response = escape_markdown(response)
-            bot.send_message(message.chat.id, formatted_response, parse_mode='MarkdownV2')
+            full_response_text += formatted_response if full_response_text else formatted_response
+
+            if message_to_update:
+                # Update the message with the concatenated text
+                bot.edit_message_text(chat_id=message.chat.id,
+                                      message_id=message_to_update.message_id,
+                                      text=full_response_text,
+                                      parse_mode='MarkdownV2',
+                                      disable_web_page_preview=True)
+            else:
+                # Send the first chunk as a new message
+                message_to_update = bot.send_message(message.chat.id,
+                                                     full_response_text,
+                                                     parse_mode='MarkdownV2',
+                                                     disable_web_page_preview=True)
+
             if not last_chunk_received:
                 bot.send_chat_action(message.chat.id, 'typing')
                 last_chunk_received = True
