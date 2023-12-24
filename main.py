@@ -1,5 +1,7 @@
 import os
-import requests
+import re
+import aiohttp
+import asyncio
 import telebot
 from dotenv import load_dotenv
 
@@ -13,59 +15,69 @@ API_KEY = os.getenv('API_KEY')
 bot = telebot.TeleBot(TOKEN)
 
 
-# Function to handle API requests
-def handle_api_request(message, delete=False):
+def escape_markdown(text):
+    # List of Markdown special characters
+    markdown_chars = ['\\*', '\\_', '\\[', '\\]', '\\(', '\\)', '\\~', '\\`', '\\>', '\\#', '\\+', '\\-', '\\=', '\\|',
+                      '\\{', '\\}', '\\.', '\\!']
+
+    # Escape each special character with a backslash
+    for char in markdown_chars:
+        text = re.sub(char, lambda match: '\\' + match.group(0), text)
+
+    return text
+
+
+# Async function to handle API requests
+async def handle_api_request(message, delete=False):
     user_id = str(message.from_user.id)
     message_id = str(message.message_id)
 
-    if delete:
-        # Send DELETE request
-        headers = {
-            'Content-Type': 'application/json',
-            'x-api-key': API_KEY
-        }
-        response = requests.delete(f"{BASE_API_URL}/delete/{user_id}", headers=headers)
-        return "Conversation deleted." if response.status_code == 200 else "Error in deletion."
-    else:
-        # Send POST request with stream=True for handling streaming response
-
-        data = {
-            "message_id": message_id,
-            "query": message.text,
-            "conversation_id": user_id
-        }
-        headers = {
-            'Content-Type': 'application/json',
-            'x-api-key': API_KEY
-        }
-        response = requests.post(f"{BASE_API_URL}/conversations/{user_id}", headers=headers, json=data, stream=True)
-
-        if response.status_code == 200:
-            response_text = ''
-            try:
-                for line in response.iter_lines():
-                    if line:
-                        response_text += line.decode('utf-8')
-            except requests.exceptions.ChunkedEncodingError as e:
-                # Handle potential errors during streaming
-                return f"Error while streaming response: {e}"
-
-            return response_text if response_text else "No response received from the API or the response is empty."
+    headers = {
+        'Content-Type': 'application/json',
+        'x-api-key': API_KEY
+    }
+    async with aiohttp.ClientSession() as session:
+        if delete:
+            # Send DELETE request
+            async with session.delete(f"{BASE_API_URL}/delete/{user_id}", headers=headers) as response:
+                yield "Conversation deleted." if response.status == 200 else "Error in deletion."
         else:
-            return "Sorry, there was an error processing your request."
+            # Send POST request for handling streaming response
+            data = {
+                "message_id": message_id,
+                "query": message.text,
+                "conversation_id": user_id
+            }
+            async with session.post(f"{BASE_API_URL}/conversations/{user_id}", headers=headers, json=data) as response:
+                if response.status == 200:
+                    async for line in response.content.iter_any():
+                        decoded_line = line.decode('utf-8').strip()
+                        if decoded_line:
+                            yield decoded_line
+                else:
+                    yield "Sorry, there was an error processing your request."
 
 
-# Handle incoming messages
+# Function to handle incoming messages
 @bot.message_handler(func=lambda message: True)
 def handle_text(message):
-    # Detect if the message is a delete command
+    # Detect if the message is a delete message command
     delete_command = message.text.strip() in ['/delete', '/clear']
 
-    # Send API request and get the response
-    response = handle_api_request(message, delete=delete_command)
+    # Asynchronously process the response
+    async def process_response():
+        last_chunk_received = False
+        async for response in handle_api_request(message, delete=delete_command):
+            # Escape Markdown characters
+            formatted_response = escape_markdown(response)
+            bot.send_message(message.chat.id, formatted_response, parse_mode='MarkdownV2')
+            if not last_chunk_received:
+                bot.send_chat_action(message.chat.id, 'typing')
+                last_chunk_received = True
 
-    # Send the response to the user
-    bot.send_message(message.chat.id, response)
+    # Show 'typing' action initially
+    bot.send_chat_action(message.chat.id, 'typing')
+    asyncio.run(process_response())
 
 
 if __name__ == '__main__':
