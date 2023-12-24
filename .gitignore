@@ -1,0 +1,12 @@
+# .gitignore
+# Ignore environment configuration
+.env
+
+# Ignore Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Ignore virtual environment
+venv/
