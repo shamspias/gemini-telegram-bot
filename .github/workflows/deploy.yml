@@ -1,0 +1,75 @@
+name: Gemini API Service Deploy CI/CD Workflow
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v2
+
+      - name: Copy Files to Server
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "."
+          target: "/home/ubuntu/gemini-telegram-bot"
+
+      - name: SSH Remote Commands
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            echo "Running commands on remote server"
+            
+            # go to the project directory
+            cd /home/ubuntu/gemini-telegram-bot
+            
+            # remove the old venv
+            sudo rm -r venv
+            
+            # install python3-venv
+            python3.11 -m venv venv
+            . venv/bin/activate
+            pip install -r requirements.txt
+            
+            # Add environment variables to the .env file
+            # remove the old .env file
+            sudo rm -f .env
+            
+            echo "TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}" >> .env
+            echo "API_KEY=${{ secrets.API_KEY }}" >> .env
+            echo "BASE_API_URL=${{ secrets.BASE_API_URL }}" >> .env
+            
+            # Remove the old systemd service file if it exists
+            sudo rm -f /etc/systemd/system/gemini_telegram_bot.service
+
+            # Create systemd service file for the Docker container
+            echo "[Unit]
+            Description=Scraper Uvicorn Service
+            After=network.target
+            
+            [Service]
+            User=ubuntu
+            Group=www-data
+            WorkingDirectory=/home/ubuntu/gemini-telegram-bot
+            ExecStart=/home/ubuntu/gemini-telegram-bot/venv/bin/python main.py
+            Restart=always
+            
+            [Install]
+            WantedBy=multi-user.target" | sudo tee /etc/systemd/system/gemini_telegram_bot.service
+
+            # Reload systemd, enable and start the service
+            sudo systemctl daemon-reload
+            sudo systemctl enable gemini_telegram_bot.service
+            sudo systemctl start gemini_telegram_bot.service
+            sudo systemctl restart gemini_telegram_bot
