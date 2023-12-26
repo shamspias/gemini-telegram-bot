@@ -44,6 +44,9 @@ async def handle_api_request(message, delete=False, image_url=None):
             # Determine if the message is a text or photo with caption
             query_text = message.caption if message.content_type == 'photo' else message.text
 
+            if image_url and query_text == "" or query_text is None:
+                query_text = "What insights can you provide about this image?"
+
             data = {
                 "message_id": message_id,
                 "query": query_text,
